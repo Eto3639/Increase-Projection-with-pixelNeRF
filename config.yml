@@ -1,0 +1,37 @@
+# --- Dataset Configuration ---
+dataset:
+  root_dir: "drr_dataset"         # DRRデータセットのルートディレクトリ
+  target_angles: [30, 60, 120, 150, 180] # 学習に使用するターゲット角度
+  img_norm_type: "max_val"        # 画像正規化タイプ ("max_val": 最大値で割る, "min_max": [0,1])
+  # img_size: [256, 256]         # 必要ならリサイズ [H, W] (オプション)
+
+# --- Training Configuration ---
+training:
+  device: "cuda"                  # "cuda" or "cpu"
+  learning_rate: 5.0e-5           # 学習率
+  num_epochs: 200                 # 総エポック数
+  batch_size: 1                   # バッチサイズ (GPUメモリに応じて調整)
+  num_rays_per_batch: 4096        # 1バッチあたりにサンプリングするレイの数
+  # num_workers: 0                # DataLoaderのワーカー数 (0推奨)
+  save_checkpoint_freq: 20       # チェックポイントを保存するエポック間隔
+  val_freq: 10                    # 検証を実行するエポック間隔 (未実装)
+  log_dir: "logs"                 # TensorBoard等のログ保存ディレクトリ
+  checkpoint_dir: "checkpoints"   # モデルチェックポイント保存ディレクトリ
+
+# --- Model Configuration (PixelNeRF) ---
+model:
+  n_pos_freqs: 10                 # 位置エンコーディングの周波数
+  d_feature: 256                  # 画像特徴量の次元
+  d_mlp_width: 256                # NeRF MLPの隠れ層の幅
+  n_samples_coarse: 64            # Coarseサンプリング数
+  n_samples_fine: 128             # Fineサンプリング数
+  use_fine_model: True            # Fineモデルを使用するか
+  # near_plane: 0.1               # レイサンプリングの近傍平面距離 (デフォルト)
+  # far_plane: 2000.0             # レイサンプリングの遠方平面距離 (デフォルト)
+
+# --- Geometry Configuration ---
+geometry:
+  # DiffDRR の extrinsics は World-to-Camera (w2c)
+  # NeRF の get_rays は Camera-to-World (c2w) を必要とする
+  invert_extrinsics: True        # extrinsics を逆行列にするか (True推奨)
+  grid_sample_align_corners: False # F.grid_sample の align_corners 設定
