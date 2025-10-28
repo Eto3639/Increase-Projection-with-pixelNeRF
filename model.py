@@ -198,10 +198,16 @@ class PixelNeRFModel(nn.Module):
          inds = torch.searchsorted(cdf, u, right=True)
          below = torch.max(torch.zeros_like(inds-1), inds-1)
          above = torch.min((cdf.shape[-1]-1) * torch.ones_like(inds), inds)
-         inds_g = torch.stack([below, above], -1)
-         matched_shape = [inds_g.shape[0], inds_g.shape[1], cdf.shape[-1]]
-         cdf_g = torch.gather(cdf.unsqueeze(2).expand(matched_shape), 2, inds_g)
-         bins_g = torch.gather(z_vals_mid.unsqueeze(2).expand(matched_shape), 2, inds_g)
+         inds_g = torch.stack([below, above], -1) # (B, N_rays, N_samples_fine, 2)
+
+         # gatherのためにcdfとz_vals_midをinds_gの形状にブロードキャスト可能にする
+         B, N_rays, N_samples_fine, _ = inds_g.shape
+         cdf_expanded = cdf.unsqueeze(2).expand(B, N_rays, N_samples_fine, -1)
+         z_vals_mid_expanded = z_vals_mid.unsqueeze(2).expand(B, N_rays, N_samples_fine, -1)
+
+         cdf_g = torch.gather(cdf_expanded, 3, inds_g)
+         bins_g = torch.gather(z_vals_mid_expanded, 3, inds_g)
+
          denom = (cdf_g[..., 1]-cdf_g[..., 0])
          denom = torch.where(denom < 1e-5, torch.ones_like(denom), denom)
          t = (u-cdf_g[..., 0])/denom
