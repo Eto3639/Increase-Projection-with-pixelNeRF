@@ -58,7 +58,9 @@ class NeRF_MLP(nn.Module):
         x_input = torch.cat([pos_emb, feature_0, feature_90], dim=-1)
         x = x_input
         for i, layer in enumerate(self.mlp_layers):
-            if i == self.skip_layer: # Skip connection input
+            # iはモジュール(Linear, ReLU)のインデックス。skip_layerはLinear層のインデックス。
+            # iがskip_layer番目のLinear層を指すインデックス (2*k) になった時にcatする。
+            if i == self.skip_layer * 2:
                  x = torch.cat([x, x_input], dim=-1)
             x = layer(x) # mlp_layersにはReLUも含まれているので、ここで適用される
         sigma = self.output_layer(x)
