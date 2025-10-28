@@ -317,18 +317,7 @@ def get_rays(H: int, W: int, K: torch.Tensor, c2w: torch.Tensor) -> tuple[torch.
     directions_cam = cam_coords.transpose(1, 2) # (B, H*W, 3)
 
     # --- c2w の形状を (B, 4, 4) に整形 ---
-    c2w_proc = c2w.float()
-    while c2w_proc.dim() > 3:
-        if c2w_proc.shape[1] == 1:
-            c2w_proc = c2w_proc.squeeze(1)
-        else:
-            raise ValueError(f"Cannot squeeze c2w to 3D tensor: current shape {c2w_proc.shape}")
-    if c2w_proc.dim() != 3 or c2w_proc.shape[1:] != (4, 4):
-         # バッチサイズ1で (4, 4) の場合も考慮
-         if B == 1 and c2w_proc.dim() == 2 and c2w_proc.shape == (4, 4):
-             c2w_proc = c2w_proc.unsqueeze(0) # (1, 4, 4) にする
-         else:
-             raise ValueError(f"Failed to reshape c2w to (B, 4, 4): final shape {c2w_proc.shape}")
+    c2w_proc = c2w.float().reshape(B, 4, 4)
 
     rotation_c2w = c2w_proc[:, :3, :3] # (B, 3, 3)
 
