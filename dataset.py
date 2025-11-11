@@ -3,7 +3,7 @@ from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 import random
 from torchvision import transforms
-# from torchvision.transforms.functional import resize # リサイズする場合
+from torchvision.transforms.functional import resize
 
 def normalize_drr_max_val(tensor):
     """最大値で割って [0, 1] に正規化"""
@@ -27,13 +27,27 @@ class DRRDataset(Dataset):
     DiffDRRで生成されたデータセット用のカスタムDatasetクラス。
     0度と90度を入力とし、他の角度をランダムにターゲットとする。
     """
-    def __init__(self, cfg: dict):
+    def __init__(self, cfg: dict, split: str = 'train', patient_dirs: list = None):
         self.root_path = Path(cfg['dataset']['root_dir'])
         self.target_angles = cfg['dataset']['target_angles']
         self.img_norm_type = cfg['dataset']['img_norm_type']
-        # self.img_size = cfg['dataset'].get('img_size', None) # オプション: リサイズ
+        self.img_size = cfg['dataset'].get('img_size', None)
+        self.split = split
 
-        self.patient_dirs = sorted([d for d in self.root_path.iterdir() if d.is_dir()])
+        # --- Augmentation ---
+        self.transform = None
+        aug_cfg = cfg['dataset'].get('augmentation', {})
+        if self.split == 'train' and aug_cfg.get('enabled', False):
+            self.transform = transforms.ColorJitter(
+                brightness=aug_cfg.get('brightness', 0),
+                contrast=aug_cfg.get('contrast', 0)
+            )
+            print("Data augmentation enabled for training split.")
+
+        if patient_dirs is None:
+            self.patient_dirs = sorted([d for d in self.root_path.iterdir() if d.is_dir()])
+        else:
+            self.patient_dirs = patient_dirs
         
         self.file_list = []
         for patient_dir in self.patient_dirs:
@@ -67,17 +81,31 @@ class DRRDataset(Dataset):
 
     def __getitem__(self, idx):
         pt_dir = self.file_list[idx]
+        valid_targets = [a for a in self.target_angles if (pt_dir / f"angle_{a:03d}.pt").exists()]
+        target_angle = random.choice(valid_targets)
+        return self._load_and_process_item(pt_dir, target_angle)
 
+    def get_item_for_visualization(self, patient_idx: int, angle: int):
+        """指定された患者IDと角度のデータを取得する（可視化用）"""
+        pt_dir = self.file_list[patient_idx]
+        target_img_path = pt_dir / f"angle_{angle:03d}.pt"
+        target_params_path = pt_dir / f"params_{angle:03d}.pt"
+
+        if not (target_img_path.exists() and target_params_path.exists()):
+            return None # その患者が指定の角度を持っていない場合はNoneを返す
+
+        return self._load_and_process_item(pt_dir, angle)
+
+    def _load_and_process_item(self, pt_dir: Path, target_angle: int):
         # --- データ読み込み ---
         img_0 = torch.load(pt_dir / "angle_000.pt")
         img_90 = torch.load(pt_dir / "angle_090.pt")
         params_0 = torch.load(pt_dir / "params_000.pt")
         params_90 = torch.load(pt_dir / "params_090.pt")
 
-        valid_targets = [a for a in self.target_angles if (pt_dir / f"angle_{a:03d}.pt").exists()]
-        target_angle = random.choice(valid_targets)
         target_img = torch.load(pt_dir / f"angle_{target_angle:03d}.pt")
         target_params = torch.load(pt_dir / f"params_{target_angle:03d}.pt")
+        target_params['angle'] = torch.tensor(float(target_angle))
 
         # --- 前処理 ---
         # チャンネル次元を追加 (C, H, W) -> (1, H, W)
@@ -98,12 +126,40 @@ class DRRDataset(Dataset):
              # 正規化しない場合 (または他のタイプ)
              pass
 
-        # # オプション: リサイズ
-        # if self.img_size:
-        #     img_0 = resize(img_0, self.img_size, antialias=True)
-        #     img_90 = resize(img_90, self.img_size, antialias=True)
-        #     target_img = resize(target_img, self.img_size, antialias=True)
-        #     # 注意: リサイズした場合、カメラのIntrinsicsも調整が必要
+        # --- Augmentation ---
+        if self.transform:
+            # 同じ変換を適用するために一度スタックする
+            all_images = torch.cat([img_0, img_90, target_img], dim=0)
+            all_images_transformed = self.transform(all_images)
+            img_0, img_90, target_img = torch.chunk(all_images_transformed, 3, dim=0)
+
+        # オプション: リサイズ
+        if self.img_size:
+            original_h, original_w = img_0.shape[-2:]
+            new_h, new_w = self.img_size
+
+            if original_h != new_h or original_w != new_w:
+                # 画像をリサイズ
+                img_0 = resize(img_0, self.img_size, antialias=True)
+                img_90 = resize(img_90, self.img_size, antialias=True)
+                target_img = resize(target_img, self.img_size, antialias=True)
+                
+                # カメラのIntrinsicsも調整
+                scale_h = new_h / original_h
+                scale_w = new_w / original_w
+
+                def adjust_intrinsics(params):
+                    intrinsics = params['intrinsics']
+                    intrinsics[0, 0] *= scale_w  # fx
+                    intrinsics[1, 1] *= scale_h  # fy
+                    intrinsics[0, 2] *= scale_w  # cx
+                    intrinsics[1, 2] *= scale_h  # cy
+                    params['intrinsics'] = intrinsics
+                    return params
+
+                params_0 = adjust_intrinsics(params_0)
+                params_90 = adjust_intrinsics(params_90)
+                target_params = adjust_intrinsics(target_params)
 
         # カメラパラメータの次元を確認し、必要ならバッチ次元を追加 (load後は通常ない)
         if params_0['intrinsics'].dim() == 2:

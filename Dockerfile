@@ -13,7 +13,11 @@ RUN pip install \
     matplotlib \
     imageio \
     imageio-ffmpeg \
-    nibabel # NIFTIファイルの読み書きに推奨
+    nibabel \
+    timm \
+    lpips \
+    optuna \
+    wandb
 
 # 3. アプリケーションコード用のディレクトリ作成
 WORKDIR /workspace
