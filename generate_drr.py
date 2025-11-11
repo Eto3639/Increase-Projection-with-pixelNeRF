@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D # For 3D plotting
 import yaml
 import argparse
+import random
 
 # --- DiffDRR/Torchio Imports ---
 try:
@@ -57,11 +58,11 @@ def load_config(path="config.yml"):
 # --- ハードコード設定 ---
 CT_NIFTI_DIR = Path("/data/CT_Nifti")
 BASE_OUTPUT_DIR = Path("drr_dataset")
+DRR_IMG_OUTPUT_DIR = Path("drr_images") # DRR画像出力用
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 HEIGHT = 512
 WIDTH = 512
 DELX = 1.0
-VISUALIZE = True
 ANGLES_TO_GENERATE = [0, 30, 60, 90, 120, 150, 180]
 
 # --- 関数定義 ---
@@ -145,22 +146,29 @@ def save_debug_visualizations(subject, all_cam_params, output_dir):
         print(f"    ❌ カメラジオメトリのプロット作成に失敗: {e}")
 
 
-def process_single_file(nifti_file_path: Path, drr_instance: DRR, sdd: float):
+def process_single_file(nifti_file_path: Path, drr_instance: DRR, sdd: float, generate_drr: bool):
     """
-    単一のNiftiファイルを受け取り、全角度のカメラパラメータを生成・保存する。
-    追加で、デバッグ用の可視化も行う。
+    単一のNiftiファイルを受け取り、カメラパラメータを生成・保存する。
+    --generate フラグが指定された場合は、DRR画像を生成して保存する。
     """
     
     # SODをSDDに対する比率で計算
-    sod = sdd * 0.56
+    sod = sdd * 0.56 # Source-to-Object Distance
     print(f"  -> [DEBUG] ジオメトリ設定: SDD={sdd:.1f}, SOD={sod:.1f} (ODD={sdd - sod:.1f})")
 
     filename_stem = nifti_file_path.stem.split('.')[0]
     patient_id = filename_stem.split('_')[0] if '_' in filename_stem else filename_stem
 
+    # パラメータ保存用ディレクトリ
     output_dir_pt = BASE_OUTPUT_DIR / patient_id / "pt"
     output_dir_pt.mkdir(parents=True, exist_ok=True)
     print(f"  -> カメラパラメータ(.pt)の出力先: {output_dir_pt}")
+
+    # DRR画像保存用ディレクトリ (generate_drrがTrueの場合のみ)
+    if generate_drr:
+        output_dir_img = DRR_IMG_OUTPUT_DIR / patient_id
+        output_dir_img.mkdir(parents=True, exist_ok=True)
+        print(f"  -> DRR画像(.png)の出力先: {output_dir_img}")
 
     try:
         intrinsics = drr_instance.detector.intrinsic
@@ -173,30 +181,54 @@ def process_single_file(nifti_file_path: Path, drr_instance: DRR, sdd: float):
         print(f"    --- {angle}度のカメラパラメータを生成中... ---")
         try:
             rad = np.deg2rad(angle)
+            # カメラ位置 (eye) を計算
             eye = torch.tensor([sod * np.sin(rad), 0.0, sod * np.cos(rad)], device=DEVICE, dtype=torch.float32)
             target = torch.tensor([0.0, 0.0, 0.0], device=DEVICE, dtype=torch.float32)
             up = torch.tensor([0.0, 1.0, 0.0], device=DEVICE, dtype=torch.float32)
             
-            extrinsics = look_at_w2c(eye, target, up, device=DEVICE)
+            # World-to-Camera (w2c) 変換行列を計算
+            w2c_matrix = look_at_w2c(eye, target, up, device=DEVICE)
             
+            # パラメータを辞書に保存
             cam_params = {
                 "intrinsics": intrinsics.squeeze().cpu().detach(),
-                "extrinsics": extrinsics.cpu().detach()
+                "extrinsics": w2c_matrix.cpu().detach()
             }
             all_cam_params[angle] = cam_params # デバッグプロット用に保持
 
+            # パラメータを .pt ファイルに保存
             output_params_path = output_dir_pt / f"params_{angle:03d}.pt"
             torch.save(cam_params, output_params_path)
             print(f"      ✅ カメラパラメータを保存しました: {output_params_path}")
 
+            # DRRを生成して保存する (--generate が指定された場合)
+            if generate_drr:
+                print("      generating DRR image...")
+                # DiffDRRはCamera-to-World (c2w) 形式のポーズを要求するため、w2cの逆行列を計算
+                # c2w の回転成分と並進成分を抽出
+                # rotation: カメラの向き, translation: カメラの位置
+                c2w_matrix = torch.inverse(w2c_matrix)
+                rotation = c2w_matrix[:3, :3].unsqueeze(0)
+                translation = c2w_matrix[:3, 3].unsqueeze(0)
+
+                # DRRをレンダリング
+                img = drr_instance(rotation, translation, parameterization="rotation_matrix")
+
+                # 画像を [0, 1] の範囲に正規化して保存
+                img_normalized = (img - img.min()) / (img.max() - img.min())
+                output_img_path = output_dir_img / f"drr_{angle:03d}_angle.png"
+                plt.imsave(output_img_path, img_normalized.cpu().squeeze().numpy(), cmap='gray')
+                print(f"      ✅ DRR画像を保存しました: {output_img_path}")
+
         except Exception as e:
-            print(f"    ❌ {angle}度のパラメータ生成中にエラーが発生しました: {e}")
+            print(f"    ❌ {angle}度の処理中にエラーが発生しました: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # 全ての角度の処理が終わった後、デバッグ用の可視化を実行
     if all_cam_params:
         save_debug_visualizations(drr_instance.subject, all_cam_params, output_dir_pt.parent)
-
 
 def main():
     cfg = load_config()
@@ -204,13 +236,25 @@ def main():
     SDD = cfg['drr']['sdd']
     print(f"  -> [DEBUG] SDD (線源-検出器間距離) を config.yml から読み込みました: {SDD}")
 
-    parser = argparse.ArgumentParser(description="Generate DRRs from NIFTI files.")
-    parser.add_argument("--file", type=str, default=None, help="Path to a single NIFTI file to process (within the container).")
+    parser = argparse.ArgumentParser(description="Generate camera parameters and optionally DRRs from NIFTI files.")
+
+    # ファイル選択モードの引数を追加
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--file", type=str, default=None, help="Path to a single NIFTI file to process.")
+    mode_group.add_argument("--single", action="store_true", help="Process the first found NIFTI file for a quick test.")
+    mode_group.add_argument("--random", type=int, metavar="N", help="Process N random NIFTI files.")
+
+    parser.add_argument("--generate", action="store_true", help="Generate and save DRR images in addition to camera parameters.")
     args = parser.parse_args()
+
+    if args.generate:
+        print("🚀 DRR生成モードが有効です。カメラパラメータと共にDRR画像を生成・保存します。")
 
     print(f"Using device: {DEVICE}")
     
+    # --- 処理対象ファイルのリストアップ ---
     if args.file:
+        # --file が指定された場合
         single_file = Path(args.file)
         if not single_file.exists():
             print(f"エラー: 指定されたファイルが見つかりません: {args.file}")
@@ -218,14 +262,30 @@ def main():
         files_to_process = [single_file]
         print(f"単一ファイルモードで実行します: {args.file}")
     else:
+        # --file 以外の場合、まず全ファイルを検索
         if not CT_NIFTI_DIR.exists():
             print(f"エラー: コンテナ内の検索ディレクトリが見つかりません: {CT_NIFTI_DIR}")
             return
-        files_to_process = list(CT_NIFTI_DIR.glob("*.nii.gz")) + list(CT_NIFTI_DIR.glob("*.nii"))
-        if not files_to_process:
+        all_files = list(CT_NIFTI_DIR.glob("*.nii.gz")) + list(CT_NIFTI_DIR.glob("*.nii"))
+
+        if not all_files:
             print(f"エラー: {CT_NIFTI_DIR} 内に .nii.gz または .nii ファイルが見つかりません。")
             return
-        print(f"{len(files_to_process)} 件のNiftiファイルが見つかりました。処理を開始します。")
+
+        if args.single:
+            # --single: 最初の1件
+            files_to_process = all_files[:1]
+            print(f"単一テストモード: 最初の1ファイル ({files_to_process[0].name}) を処理します。")
+        elif args.random:
+            # --random N: ランダムにN件
+            num_random = min(args.random, len(all_files)) # ファイル数を超えないように
+            files_to_process = random.sample(all_files, num_random)
+            print(f"ランダムモード: {len(all_files)} ファイルから {num_random} ファイルをランダムに選択して処理します。")
+        else:
+            # デフォルト: 全ファイル
+            files_to_process = all_files
+            print(f"全ファイルモード: {len(files_to_process)} 件のNiftiファイルを処理します。")
+
 
     for i, nifti_file_path in enumerate(files_to_process):
         print("\n=====================================================")
@@ -235,31 +295,29 @@ def main():
         try:
             print(f"  diffdrr.data.read でロード中...")
             
-            # ★★★ vmin/vmax は（密度が0でないことを保証するため）必須です ★★★
             subject = read(
                 volume=str(nifti_file_path),
                 orientation="AP",
                 center_volume=True,
-                vmin=-1000.0, # CT値（HU）の最小値（空気）
-                vmax=3000.0   # CT値（HU）の最大値（骨）
+                vmin=-1000.0,
+                vmax=3000.0
             )
             print(f"  ボリュームをロードしました: {subject.density.data.shape}")
             density_data = subject.density.data
             print(f"  [DEBUG] Density stats: min={density_data.min():.4f}, max={density_data.max():.4f}, mean={density_data.mean():.4f}")
 
-            # 密度が0の場合、警告
             if density_data.max() == 0.0:
                 print("  ❌ 警告: 密度の最大値が0です。vmin/vmax の設定がCT値の範囲と合っていません。")
 
             drr_instance = DRR(
                 subject,
-                sdd=SDD, # 修正後の SDD (2000.0) を使用
+                sdd=SDD,
                 height=HEIGHT,
                 delx=DELX,
                 width=WIDTH,
             ).to(DEVICE)
 
-            process_single_file(nifti_file_path, drr_instance, SDD) # 修正後の SDD (2000.0) を使用
+            process_single_file(nifti_file_path, drr_instance, SDD, args.generate)
 
             del subject
             del drr_instance
