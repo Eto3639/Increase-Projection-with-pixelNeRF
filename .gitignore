@@ -12,6 +12,7 @@ logs/
 checkpoints/
 visualizations/
 .home/
+wandb/
 
 
 # WandB API Key
