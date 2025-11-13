@@ -1,0 +1,19 @@
+# Dockerfile for the DRR Generator
+# Contains only the dependencies needed to run generate_drr.py
+
+# 1. ベースイメージ
+FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel
+
+# 2. 必要なPythonパッケージのインストール
+RUN pip install \
+    # Core DRR libraries
+    diffdrr \
+    torchio \
+    nibabel \
+    # Utilities
+    pyyaml \
+    tqdm \
+    matplotlib
+
+# 3. アプリケーションコード用のディレクトリ作成
+WORKDIR /workspace

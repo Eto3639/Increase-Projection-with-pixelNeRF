@@ -18,7 +18,3 @@ wandb/
 # WandB API Key
 .wandb_api_key
 
-AGENT_STATUS.md
-gene_drr_original.py
-test_and_verify_generation.sh
-visual_debug.py

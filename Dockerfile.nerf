@@ -1,0 +1,22 @@
+# Dockerfile for the NeRF/Multiview Trainer
+# Contains all dependencies for training, and also for reading the DRR dataset.
+
+# 1. ベースイメージ
+FROM pytorch/pytorch:2.0.1-cuda11.7-cudnn8-devel
+
+# 2. 必要なPythonパッケージのインストール
+RUN pip install \
+    # --- NeRF training dependencies ---
+    timm \
+    lpips \
+    optuna \
+    wandb \
+    # --- Common utilities & visualization ---
+    pyyaml \
+    tqdm \
+    matplotlib \
+    imageio \
+    imageio-ffmpeg
+
+# 3. アプリケーションコード用のディレクトリ作成
+WORKDIR /workspace
