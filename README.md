@@ -110,3 +110,14 @@ sudo docker build -t nerf-trainer .
 ├── run_drr_all.sh          # 全CTデータに対してDRR生成を実行
 └── run_train.sh            # Dockerコンテナで学習を実行
 ```
+
+## 8. ライセンス
+
+本プロジェクトはMITライセンスの下で公開されています。
+
+本プロジェクトで使用している主要なライブラリおよびデータセットのライセンスは以下の通りです。
+
+- **diffDRR:** [MIT License](https://github.com/eigenvivek/DiffDRR/blob/main/LICENSE)
+- **LIDC-IDRI Dataset:** [Creative Commons Attribution 3.0 Unported License](https://creativecommons.org/licenses/by/3.0/)
+
+詳細については、各ライブラリおよびデータセットのライセンスファイルをご確認ください。
